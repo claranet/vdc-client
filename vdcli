@@ -1,0 +1,211 @@
+#!/usr/bin/env python
+
+# vdcli (VDC CLI Tool), version 1.0.0, release
+#
+# Copyright 2015 Claranet (david.freedman@eu.clara.net)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+# a. The enclosed LICENSE.txt file
+# b. http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import argparse
+import ConfigParser
+import jsonpickle
+import os
+import signal
+import sys
+
+from distutils.version import LooseVersion
+
+from pprint import pprint
+
+from libcloud import __version__ as __libcloudversion__
+from libcloud.compute.base import NodeSize
+from libcloud.common.types import InvalidCredsError, LibcloudError
+from libcloud.common.abiquo import ForbiddenError
+from libcloud.compute.types import Provider
+from libcloud.compute.providers import get_driver
+
+__version__ = '1.0.0'
+
+# signal handling, to clean up nicely if SIGINT is sent
+def signal_handler(signal, frame):
+ print('Interrupted, cleaning up...')
+ sys.exit(-1)
+signal.signal(signal.SIGINT, signal_handler)
+
+# Check libcloud version
+if LooseVersion(__libcloudversion__) < LooseVersion('0.17.0'):
+ print "vdcli requires libcloud at least version 0.17.0"
+ sys.exit(-1)
+
+# Read the config file
+config = ConfigParser.ConfigParser()
+try:
+ config.read(os.path.expanduser('~/.vdcli'))
+except Exception as ex:
+ print "configuration not found, or not readable"
+ exit
+
+# Read configuration parameters
+try:
+ username = config.get('auth', 'username')
+ password = config.get('auth', 'password')
+ url      = config.get('auth', 'url')
+except ConfigParser.NoSectionError:
+ print "configuration missing [auth] section, can not continue"
+ sys.exit(-1)
+except ConfigParser.NoOptionError as ex:
+ print "configuration missing [%s] option, can not continue" % ex.option
+ sys.exit(-1)
+
+# Parse arguments
+parser = argparse.ArgumentParser(description='VDC CLI client')
+parser.add_argument('-a', '--create-name', action='store', help="(create) node name", dest="str_create_node_name", metavar="NAME")
+parser.add_argument('-m', '--create-ram', action='store', help="(create) node RAM size (MB)", dest="str_create_node_ram", metavar="RAM")
+parser.add_argument('-t', '--create-dc', action='store', help="(create) node datacenter id", dest="str_create_node_dc", metavar="DCID")
+parser.add_argument('-g', '--create-img', action='store', help="(create) node image id", dest="str_create_node_img", metavar="IMGID")
+parser.add_argument('-p', '--create-vapp', action='store', help="(create) node virtual app name", dest="str_create_node_vapp", metavar="VAPP")
+displaygroup = parser.add_mutually_exclusive_group()
+displaygroup.add_argument('-b', '--verbose', action='store_true', help="verbose operation", dest='flag_verbose')
+displaygroup.add_argument('-j', '--json', action='store_true', help="display json", dest='flag_json')
+actiongroup = parser.add_mutually_exclusive_group()
+actiongroup.add_argument('-v', '--version', action='version', version=__version__)
+actiongroup.add_argument('-l', '--lversion', action='version', help="show libcloud's version and exit", version=__libcloudversion__)
+actiongroup.add_argument('-c', '--create-node', help='create node', action='store_true', dest='action_create_node')
+actiongroup.add_argument('-s', '--list-nodes', help='list machines', action='store_true', dest='action_list_nodes')
+actiongroup.add_argument('-d', '--list-datacenters', help='list datacenters', action='store_true', dest='action_list_datacenters')
+actiongroup.add_argument('-i', '--list-images', help='list images', action='store_true', dest='action_list_images')
+actiongroup.add_argument('-x', '--destroy-node', help='destroy a node', action='store', dest='action_destroy_node', metavar="UUID")
+actiongroup.add_argument('-r', '--reboot-node', help='reboot a node', action='store', dest='action_reboot_node', metavar="UUID")
+parser.epilog = 'Example node creation: ./vdcli --create-node --create-name "My VM" --create-ram 512 --create-dc 14 --create-img 1 --create-vapp "My VApp"'
+results = parser.parse_args()
+
+# Connect to VDC
+try:
+ cls = get_driver(Provider.ABIQUO)
+ driver = cls(user_id=username, secret=password, endpoint=url)
+except ForbiddenError:
+ print "invalid credentials"
+ sys.exit(-1)
+except Exception as ex:
+ print "Unknown error while connecting: %s" % ex.message
+ #print str(ex)
+ sys.exit(-1)
+
+# Act on user request
+if (results.action_list_nodes is True):
+ for node in driver.list_nodes():
+  if node.state == 0: 
+   pretty_state = 'RUNNING'
+  elif node.state == 3: 
+   pretty_state = 'PENDING'
+  else:
+   pretty_state = 'UNKNOWN'
+  if (results.flag_verbose is True):
+   uuid = node.uuid
+   pprint(vars(node))
+  elif (results.flag_json is True):
+   uuid = node.uuid
+   print jsonpickle.encode(node)
+  else:
+   print "uuid=%s, name=%s, state=%s" % (node.uuid, node.name, pretty_state)
+elif (results.action_list_datacenters is True):
+ for location in driver.list_locations():
+  if (results.flag_json is True): 
+   print jsonpickle.encode(location)
+  else:
+   loc = location.split('/')[-1]
+   if loc == "3": 
+    name = 'DCUK_GS2'
+   elif loc == "5":
+    name = 'DCDE_CF2'
+   elif loc == "7":
+    name = 'DCFR_CV2'
+   elif loc == "9":
+    name = 'DCNL_SON'
+   elif loc == "11":
+    name = 'DCES_TV1'
+   elif loc == "14":
+    name = 'DCUK_HOD'
+   else:   
+    name = 'UNKNOWN'
+   print "id=%s, name=%s" % (loc, name)
+elif (results.action_list_images is True):
+ if results.str_create_node_dc is None:
+  print "Node dc required to list images"
+  sys.exit(-1)
+ location = '/cloud/locations/' + results.str_create_node_dc
+ try:
+  for image in driver.list_images(location):
+   if (results.flag_json is True): 
+    print jsonpickle.encode(image)
+   else:
+    hdrequired = image.extra['hdrequired']
+    if hdrequired > 0:
+     hdrequired = (int(hdrequired) / 1073741824)
+    print "id=%s, name=%s, size=%sGB" % (image.id, image.name, hdrequired)
+ except Exception as ex: 
+  print "Unable to find any images for this DC"
+  print ex
+elif (results.action_create_node is True):
+
+ if results.str_create_node_name is None:
+  print "Node name required to create node"
+  sys.exit(-1)
+ if results.str_create_node_ram is None:
+  print "Node ram required to create node"
+  sys.exit(-1)
+ if results.str_create_node_dc is None:
+  print "Node dc required to create node"
+  sys.exit(-1)
+ if results.str_create_node_img is None:
+  print "Node img required to create node"
+  sys.exit(-1)
+ if results.str_create_node_vapp is None:
+  print "Node vapp required to create node"
+  sys.exit(-1)
+
+ loc_found = None
+ loc_str = '/cloud/locations/' + results.str_create_node_dc
+ for location in driver.list_locations():
+  if (location == loc_str):
+   loc_found = driver.connection.cache['locations'][location]
+ if loc_found is None:
+  print "Datacenter %s not found" % results.str_create_node_dc
+  sys.exit(-1)
+
+ location = '/cloud/locations/' + results.str_create_node_dc
+ img_found = None
+ for image in driver.list_images(loc_str):
+  if (image.id == results.str_create_node_img): 
+   img_found = image
+ if img_found is None:
+  print "Image %s is not present in datacenter %s" % (results.str_create_node_img, results.str_create_node_dc)
+  sys.exit(-1)
+
+ nodesize = NodeSize(id=1, name='custom', ram=results.str_create_node_ram, disk=1, bandwidth=None, price=None, driver=driver)
+
+ node = driver.create_node(name=results.str_create_node_name, size=nodesize, image=img_found, location=location, group_name=results.str_create_node_vapp)
+ 
+ print "node %s created with uuid %s" % (results.str_create_node_name, node.uuid)
+
+elif (results.action_destroy_node is not None):
+ for node in driver.list_nodes():
+  if node.uuid == results.action_destroy_node:
+   print "destroying node with uuid %s" % results.action_destroy_node
+   node.destroy()
+elif (results.action_reboot_node is not None):
+ for node in driver.list_nodes():
+  if node.state == 0 and node.uuid == results.action_reboot_node:
+   print "rebooting node with uuid %s" % results.action_reboot_node
+   node.reboot()
