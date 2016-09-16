@@ -1,6 +1,6 @@
 Python based command line client for VDC<br>
-Requires apache libcloud 17.0 or newer,<br>
-install with 'pip install apache-libcloud'<br>
+Requires apache libcloud 1.2.0 or newer,<br>
+install with 'pip3 install apache-libcloud'<br>
 
 ```
  usage: vdcli [-h] [-a NAME] [-m RAM] [-t DCID] [-g IMGID] [-p VAPP] [-b | -j]
