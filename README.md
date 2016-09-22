@@ -1,4 +1,4 @@
-Python based command line client for VDC<br>
+Python3 based command line client for VDC<br>
 Requires apache libcloud 1.2.0 or newer,<br>
 install with 'pip3 install apache-libcloud'<br>
 
@@ -42,7 +42,7 @@ Before use, you must create a configuration file in your home directory called '
 This should contain the following:
 ```
 [auth]
-url=https://portal.claranet.com/api
+url=https://portal.cloud.claranet.com/api
 username=<vdc username>
 password=<vdc password>
 ```
